@@ -1,0 +1,37 @@
+# Reverse proxy with automatic HTTPS (Let's Encrypt).
+# The domain comes from the DOMAIN variable in the .env.
+{
+	servers {
+		# The site sits behind a CDN: the IP reaching Caddy is the CDN's, not the
+		# visitor's. Only when the request comes from a CDN range is its
+		# forwarded-IP header trusted; any other origin uses its connection IP, so
+		# nobody can spoof an IP by bypassing the CDN. Update these ranges from the
+		# CDN's published list if they change (and the host firewall alongside).
+		trusted_proxies static {$CDN_RANGES}
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# Edge-level security headers (added on top of the backend's).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Upload size limit at the proxy level (extra anti-DoS defense).
+	request_body {
+		max_size 2MB
+	}
+
+	reverse_proxy backend:8000 {
+		# Real visitor IP (resolved above) for the rate-limit and logs.
+		header_up X-Real-IP {client_ip}
+		header_up X-Forwarded-For {client_ip}
+	}
+}

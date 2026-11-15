@@ -1,0 +1,150 @@
+name: marketplace
+# ── PRODUCTION compose with Caddy (TLS terminated at the edge) ──
+#
+# Reverse proxy (Caddy) terminates HTTPS with automatic Let's Encrypt certs and
+# forwards to the FastAPI backend over Docker's internal network. The backend is
+# NOT published to the host — only Caddy can reach it.
+#
+# Required in the production .env:
+#   ENV=prod
+#   DOMAIN=example.com
+#   ALLOWED_ORIGINS=https://example.com
+#   DATABASE_URL=...            (managed Postgres)
+#   PAYMENTS_MODE=real          (with the gateway keys)
+#
+# Start:  docker compose -f docker-compose.prod.yml up -d --build
+services:
+  backend:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Behind Caddy: trust X-Forwarded-* so per-IP rate limiting and logs see
+      # the REAL client IP, not Caddy's. Safe to set "*" because the backend is
+      # NOT published — only Caddy, on the internal docker network, can reach it.
+      FORWARDED_ALLOW_IPS: "*"
+      # 3 real parallel worker processes. The old 1-worker/512MB cap was
+      # self-imposed, not a machine limit — measured: a single worker degraded
+      # sharply between 15 and 30 concurrent connections.
+      UVICORN_WORKERS: "3"
+      # With 3 workers, each is a process with its own memory, so an in-memory
+      # rate-limit counter stops being a single shared counter. Redis is that
+      # shared store — internal, no public port (see 'redis' below).
+      RATELIMIT_STORAGE_URI: "redis://redis:6379/0"
+      # The scheduler must NOT run inside the workers: with several processes,
+      # each would start its own and every scheduled job (payments, escrow,
+      # settlements, expirations) would run in triplicate — seen in production.
+      # It runs in the 'scheduler' service below, as a single process.
+      RUN_SCHEDULER: "0"
+    depends_on:
+      - redis
+    expose:
+      - "8000"                       # visible only inside the docker network
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 3g
+    pids_limit: 512
+    cpus: 3.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Scheduled jobs (payment verification, escrow, settlements, expirations,
+  # cleanups): ONE process with RUN_SCHEDULER=1. Same image as the backend, no
+  # ports. ALWAYS DEPLOY ALONGSIDE THE BACKEND: `up -d --build backend scheduler`.
+  # If only the backend is brought up, no scheduler runs and payments stop being
+  # verified.
+  scheduler:
+    build: .
+    env_file:
+      - .env
+    environment:
+      UVICORN_WORKERS: "1"
+      RUN_SCHEDULER: "1"
+      RATELIMIT_STORAGE_URI: "redis://redis:6379/0"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 768m
+    pids_limit: 256
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Shared rate-limit store across the backend workers. No public port — only
+  # reachable from inside the docker network, by the backend.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data           # TLS certificates (persistent)
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Reachable only on the host's localhost (internal tool, never public) — an
+  # SSH tunnel is required to reach it (ssh -L 3001:localhost:3001 host).
+  grafana:
+    image: grafana/grafana-oss:11.2.0
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-admin}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:
+  grafana_data:
