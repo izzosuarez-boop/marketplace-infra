@@ -1,12 +1,17 @@
-# Production infrastructure for a FastAPI marketplace — Docker, Caddy, Redis, Grafana
+# KamasMarket infrastructure: Docker, Caddy, Redis, Grafana
 
-The container and edge setup behind a live two-sided marketplace: a FastAPI
-backend served over automatic HTTPS, horizontally scaled workers with a shared
-rate-limit store, an isolated job scheduler, and a locked-down observability
-dashboard. Every service is hardened and resource-capped.
+**Portfolio:** [ivanboot.dev](https://ivanboot.dev) · see it in [Web & API Integration](https://ivanboot.dev/web-api)
 
-This is the real production `docker-compose.prod.yml`, `Dockerfile` and
-`Caddyfile` with domain, keys and provider names genericized 
+The production setup behind KamasMarket, a peer-to-peer marketplace where the site is the middleman of every trade.
+
+I chose technologies for speed and simplicity, and for full control when the client asked for changes before going
+live. FastAPI for the backend, with Supabase (Postgres) as the database. Caddy as the production gateway: it serves
+HTTPS and is the only way in to the backend, behind Cloudflare. Redis, shared by the server's workers, caches the
+heaviest listings and keeps rate limits consistent when many users connect at once.
+
+This is the real production `docker-compose.prod.yml`, `Dockerfile` and `Caddyfile`, with the domain, keys and
+provider names made generic.
+
 ## Topology
 
 ```
