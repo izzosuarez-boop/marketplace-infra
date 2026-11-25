@@ -1,7 +1,5 @@
 # KamasMarket infrastructure: Docker, Caddy, Redis, Grafana
 
-**Portfolio:** [ivanboot.dev](https://ivanboot.dev) · see it in [Web & API Integration](https://ivanboot.dev/web-api)
-
 The production setup behind KamasMarket, a peer-to-peer marketplace where the site is the middleman of every trade.
 
 I chose technologies for speed and simplicity, and for full control when the client asked for changes before going
